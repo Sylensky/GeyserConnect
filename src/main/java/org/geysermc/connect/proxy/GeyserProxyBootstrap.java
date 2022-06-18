@@ -28,15 +28,16 @@ package org.geysermc.connect.proxy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import org.geysermc.common.PlatformType;
-import org.geysermc.connector.GeyserConnector;
-import org.geysermc.connector.bootstrap.GeyserBootstrap;
-import org.geysermc.connector.command.CommandManager;
-import org.geysermc.connector.configuration.GeyserConfiguration;
-import org.geysermc.connector.dump.BootstrapDumpInfo;
-import org.geysermc.connector.ping.GeyserLegacyPingPassthrough;
-import org.geysermc.connector.ping.IGeyserPingPassthrough;
 import org.geysermc.connect.GeyserConnectConfig;
 import org.geysermc.connect.MasterServer;
+import org.geysermc.geyser.GeyserBootstrap;
+import org.geysermc.geyser.GeyserImpl;
+import org.geysermc.geyser.command.CommandManager;
+import org.geysermc.geyser.configuration.GeyserConfiguration;
+import org.geysermc.geyser.dump.BootstrapDumpInfo;
+import org.geysermc.geyser.ping.GeyserLegacyPingPassthrough;
+import org.geysermc.geyser.ping.IGeyserPingPassthrough;
+import org.geysermc.geyser.text.GeyserLocale;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -54,10 +55,12 @@ public class GeyserProxyBootstrap implements GeyserBootstrap {
     private GeyserProxyLogger geyserLogger;
     private IGeyserPingPassthrough geyserPingPassthrough;
 
-    private GeyserConnector connector;
+    private GeyserImpl geyser;
 
     @Override
     public void onEnable() {
+        GeyserLocale.init(this);
+
         // Setup a logger
         geyserLogger = new GeyserProxyLogger();
 
@@ -74,6 +77,12 @@ public class GeyserProxyBootstrap implements GeyserBootstrap {
 
             ObjectMapper objectMapper = new ObjectMapper(new YAMLFactory());
             geyserConfig = objectMapper.readValue(text, GeyserProxyConfiguration.class);
+
+            geyserConfig.getSavedUserLogins().clear();
+            for (String savedUserLogin : MasterServer.getInstance().getGeyserConnectConfig().getGeyser().getSavedUserLogins()) {
+                geyserConfig.getSavedUserLogins().add(savedUserLogin);
+            }
+
         } catch (IOException ex) {
             geyserLogger.severe("Failed to read proxy_config.yml! Make sure it's up to date and/or readable+writable!", ex);
             return;
@@ -83,19 +92,19 @@ public class GeyserProxyBootstrap implements GeyserBootstrap {
         GeyserConfiguration.checkGeyserConfiguration(geyserConfig, geyserLogger);
 
         // Create the connector and command manager
-        connector = GeyserConnector.start(PlatformType.STANDALONE, this);
-        geyserCommandManager = new GeyserProxyCommandManager(connector);
+        geyser = GeyserImpl.start(PlatformType.STANDALONE, this);
+        geyserCommandManager = new GeyserProxyCommandManager(geyser);
 
         // Start the ping passthrough thread, again don't think there is a point
-        geyserPingPassthrough = GeyserLegacyPingPassthrough.init(connector);
+        geyserPingPassthrough = GeyserLegacyPingPassthrough.init(geyser);
 
         // Swap the normal handler to our custom handler so we can change some
-        connector.getBedrockServer().setHandler(new ProxyConnectorServerEventHandler(connector));
+        geyser.getBedrockServer().setHandler(new ProxyConnectorServerEventHandler(geyser));
     }
 
     @Override
     public void onDisable() {
-        connector.shutdown();
+        geyser.shutdown();
     }
 
     @Override

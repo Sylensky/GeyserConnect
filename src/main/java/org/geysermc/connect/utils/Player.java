@@ -25,39 +25,45 @@
 
 package org.geysermc.connect.utils;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.nukkitx.math.vector.Vector2f;
 import com.nukkitx.math.vector.Vector3f;
 import com.nukkitx.math.vector.Vector3i;
+import com.nukkitx.nbt.NbtMap;
 import com.nukkitx.protocol.bedrock.BedrockServerSession;
 import com.nukkitx.protocol.bedrock.data.*;
 import com.nukkitx.protocol.bedrock.packet.*;
+import com.nukkitx.protocol.bedrock.v471.Bedrock_v471;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import lombok.Getter;
 import lombok.Setter;
-import org.geysermc.connect.GeyserConnect;
 import org.geysermc.connect.MasterServer;
 import org.geysermc.connect.proxy.GeyserProxySession;
 import org.geysermc.connect.ui.FormID;
-import org.geysermc.connect.ui.UIHandler;
-import org.geysermc.connector.GeyserConnector;
-import org.geysermc.connector.common.AuthType;
-import org.geysermc.connector.network.UpstreamPacketHandler;
-import org.geysermc.connector.network.session.auth.AuthData;
-import org.geysermc.connector.network.session.auth.BedrockClientData;
-import org.geysermc.connector.registry.BlockRegistries;
-import org.geysermc.connector.registry.Registries;
-import org.geysermc.connector.registry.type.ItemMappings;
-import org.geysermc.connector.utils.DimensionUtils;
 import org.geysermc.cumulus.Form;
+import org.geysermc.geyser.GeyserImpl;
+import org.geysermc.geyser.level.BedrockDimension;
+import org.geysermc.geyser.network.UpstreamPacketHandler;
+import org.geysermc.geyser.registry.BlockRegistries;
+import org.geysermc.geyser.registry.Registries;
+import org.geysermc.geyser.registry.type.ItemMappings;
+import org.geysermc.geyser.session.auth.AuthData;
+import org.geysermc.geyser.session.auth.AuthType;
+import org.geysermc.geyser.session.auth.BedrockClientData;
+import org.geysermc.geyser.util.ChunkUtils;
+import org.geysermc.geyser.util.DimensionUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Getter
 public class Player {
 
     private final AuthData authData;
+    @Setter
+    private JsonNode chainData;
 
     private final BedrockServerSession session;
 
@@ -100,7 +106,7 @@ public class Player {
         startGamePacket.setPlayerPosition(Vector3f.from(0, 64 + 2, 0));
         startGamePacket.setRotation(Vector2f.ONE);
 
-        startGamePacket.setSeed(-1);
+        startGamePacket.setSeed(-1L);
         startGamePacket.setDimensionId(2);
         startGamePacket.setGeneratorId(1);
         startGamePacket.setLevelGameType(GameType.CREATIVE);
@@ -140,13 +146,19 @@ public class Player {
         startGamePacket.setItemEntries(itemMappings.getItemEntries());
         startGamePacket.setInventoriesServerAuthoritative(true);
         startGamePacket.setServerEngine("");
+        startGamePacket.setPlayerPropertyData(NbtMap.EMPTY);
+        startGamePacket.setWorldTemplateId(UUID.randomUUID());
 
         SyncedPlayerMovementSettings settings = new SyncedPlayerMovementSettings();
         settings.setMovementMode(AuthoritativeMovementMode.CLIENT);
         settings.setRewindHistorySize(0);
         settings.setServerAuthoritativeBlockBreaking(false);
         startGamePacket.setPlayerMovementSettings(settings);
-        
+
+        if (session.getPacketCodec().getProtocolVersion() <= Bedrock_v471.V471_CODEC.getProtocolVersion()) {
+            startGamePacket.getExperiments().add(new ExperimentData("caves_and_cliffs", true));
+        }
+
         startGamePacket.setVanillaVersion("*");
         session.sendPacket(startGamePacket);
 
@@ -161,7 +173,7 @@ public class Player {
         data.setChunkX(0);
         data.setChunkZ(0);
         data.setSubChunksLength(0);
-        data.setData(PaletteManger.EMPTY_LEVEL_CHUNK_DATA);
+        data.setData(ChunkUtils.EMPTY_CHUNK_DATA);
         data.setCachingEnabled(false);
         session.sendPacket(data);
 
@@ -171,7 +183,7 @@ public class Player {
         session.sendPacket(biomeDefinitionListPacket);
 
         AvailableEntityIdentifiersPacket entityPacket = new AvailableEntityIdentifiersPacket();
-        entityPacket.setIdentifiers(Registries.ENTITY_IDENTIFIERS.get());
+        entityPacket.setIdentifiers(Registries.BEDROCK_ENTITY_IDENTIFIERS.get());
         session.sendPacket(entityPacket);
 
         // Send a CreativeContentPacket - required for 1.16.100
@@ -228,17 +240,8 @@ public class Player {
             transferPacket.setPort(currentServer.getPort());
             session.sendPacket(transferPacket);
         } else {
-            GeyserProxySession geyserSession = new GeyserProxySession(GeyserConnector.getInstance(), session, MasterServer.getInstance().getEventLoopGroup().next());
-            session.setPacketHandler(new UpstreamPacketHandler(GeyserConnector.getInstance(), geyserSession));
-
-            geyserSession.getUpstream().getSession().setPacketCodec(session.getPacketCodec());
-
-            // Set the block translation based off of version
-            geyserSession.setBlockMappings(BlockRegistries.BLOCKS.forVersion(session.getPacketCodec().getProtocolVersion()));
-            geyserSession.setItemMappings(Registries.ITEMS.forVersion(session.getPacketCodec().getProtocolVersion()));
-
-            geyserSession.setAuthData(authData);
-            geyserSession.setClientData(clientData);
+            GeyserProxySession geyserSession = createGeyserSession(true);
+            GeyserImpl geyser = geyserSession.getGeyser();
 
             geyserSession.setDimension(DimensionUtils.THE_END);
 
@@ -250,15 +253,43 @@ public class Player {
             SetLocalPlayerAsInitializedPacket initializedPacket = new SetLocalPlayerAsInitializedPacket();
             initializedPacket.setRuntimeEntityId(geyserSession.getPlayerEntity().getGeyserId());
             session.getPacketHandler().handle(initializedPacket);
+
+            if (geyser.getConfig().getSavedUserLogins().contains(authData.name())) {
+                String refreshToken = geyser.refreshTokenFor(authData.name());
+                if (refreshToken != null) {
+                    geyserSession.authenticateWithRefreshToken(refreshToken);
+                }
+            }
+
+            if (geyserSession.getRemoteAuthType() != AuthType.ONLINE) {
+                geyserSession.authenticate(geyserSession.getAuthData().name());
+            }
         }
     }
 
+    public GeyserProxySession createGeyserSession(boolean initialized) {
+        GeyserProxySession geyserSession = new GeyserProxySession(GeyserImpl.getInstance(), session,
+                MasterServer.getInstance().getEventLoopGroup().next(), this, initialized);
+        session.setPacketHandler(new UpstreamPacketHandler(GeyserImpl.getInstance(), geyserSession));
+        // The player will be tracked from Geyser from here
+        MasterServer.getInstance().getPlayers().remove(this);
+        GeyserImpl.getInstance().getSessionManager().addPendingSession(geyserSession);
+
+        geyserSession.getUpstream().getSession().setPacketCodec(session.getPacketCodec());
+
+        // Set the block translation based off of version
+        geyserSession.setBlockMappings(BlockRegistries.BLOCKS.forVersion(session.getPacketCodec().getProtocolVersion()));
+        geyserSession.setItemMappings(Registries.ITEMS.forVersion(session.getPacketCodec().getProtocolVersion()));
+
+        geyserSession.setAuthData(authData);
+        geyserSession.setCertChainData(chainData);
+        geyserSession.setClientData(clientData);
+
+        return geyserSession;
+    }
+
     public void sendToServer(Server server) {
-        // Tell the user we are connecting them
-        // This wont show up in a lot of cases as the client connects quite quickly
-        if (!server.isOnline()) {
-            sendWindow(FormID.CONNECTING, UIHandler.getWaitingScreen(server));
-        }
+        // Geyser will show a "please wait" message in action bar
 
         // Send the user over to the server
         setCurrentServer(server);

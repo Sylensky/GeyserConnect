@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 GeyserMC. http://geysermc.org
+ * Copyright (c) 2019-2021 GeyserMC. http://geysermc.org
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -25,35 +25,39 @@
 
 package org.geysermc.connect.utils;
 
-import com.nukkitx.nbt.*;
+import org.geysermc.connect.MasterServer;
 
-import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.util.function.Function;
 
-/**
- * This class is mostly copied from core Geyser
- */
-public class PaletteManger {
+public final class GeyserConnectFileUtils {
 
-    public static final byte[] EMPTY_LEVEL_CHUNK_DATA;
-    private static final NbtMap EMPTY_TAG = NbtMap.EMPTY;
+    public static File fileOrCopiedFromResource(File file, String name, Function<String, String> format) throws IOException {
+        if (!file.exists()) {
+            //noinspection ResultOfMethodCallIgnored
+            file.createNewFile();
+            try (FileOutputStream fos = new FileOutputStream(file)) {
+                try (InputStream input = MasterServer.class.getClassLoader().getResourceAsStream(name)) {
+                    byte[] bytes = new byte[input.available()];
 
-    static {
-        /* Create empty chunk data */
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-            outputStream.write(new byte[258]); // Biomes + Border Size + Extra Data Size
+                    //noinspection ResultOfMethodCallIgnored
+                    input.read(bytes);
 
-            try (NBTOutputStream nbtOutputStream = NbtUtils.createNetworkWriter(outputStream)) {
-                nbtOutputStream.writeTag(EMPTY_TAG);
+                    for(char c : format.apply(new String(bytes)).toCharArray()) {
+                        fos.write(c);
+                    }
+
+                    fos.flush();
+                }
             }
-
-            EMPTY_LEVEL_CHUNK_DATA = outputStream.toByteArray();
-        } catch (IOException e) {
-            throw new AssertionError("Unable to generate empty level chunk data");
         }
+
+        return file;
     }
 
-    public static void init() {
-        // no-op
+    private GeyserConnectFileUtils() {
     }
 }
