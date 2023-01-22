@@ -33,7 +33,8 @@ import com.nukkitx.nbt.NbtMap;
 import com.nukkitx.protocol.bedrock.BedrockServerSession;
 import com.nukkitx.protocol.bedrock.data.*;
 import com.nukkitx.protocol.bedrock.packet.*;
-import com.nukkitx.protocol.bedrock.v471.Bedrock_v471;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import lombok.Getter;
@@ -43,13 +44,12 @@ import org.geysermc.connect.proxy.GeyserProxySession;
 import org.geysermc.connect.ui.FormID;
 import org.geysermc.cumulus.Form;
 import org.geysermc.geyser.GeyserImpl;
-import org.geysermc.geyser.level.BedrockDimension;
+import org.geysermc.geyser.api.network.AuthType;
 import org.geysermc.geyser.network.UpstreamPacketHandler;
 import org.geysermc.geyser.registry.BlockRegistries;
 import org.geysermc.geyser.registry.Registries;
 import org.geysermc.geyser.registry.type.ItemMappings;
 import org.geysermc.geyser.session.auth.AuthData;
-import org.geysermc.geyser.session.auth.AuthType;
 import org.geysermc.geyser.session.auth.BedrockClientData;
 import org.geysermc.geyser.util.ChunkUtils;
 import org.geysermc.geyser.util.DimensionUtils;
@@ -60,6 +60,23 @@ import java.util.UUID;
 
 @Getter
 public class Player {
+    private static final byte[] EMPTY_CHUNK_DATA;
+
+    static {
+        ByteBuf byteBuf = Unpooled.buffer();
+        try {
+            for (int i = 0; i < 32; i++) {
+                byteBuf.writeBytes(ChunkUtils.EMPTY_BIOME_DATA);
+            }
+
+            byteBuf.writeByte(0); // Border
+
+            EMPTY_CHUNK_DATA = new byte[byteBuf.readableBytes()];
+            byteBuf.readBytes(EMPTY_CHUNK_DATA);
+        } finally {
+            byteBuf.release();
+        }
+    }
 
     private final AuthData authData;
     @Setter
@@ -159,9 +176,9 @@ public class Player {
         startGamePacket.setVanillaVersion("*");
         session.sendPacket(startGamePacket);
 
-        if (itemMappings.getFurnaceMinecartData() != null) {
+        if (!itemMappings.getComponentItemData().isEmpty()) {
             ItemComponentPacket itemComponentPacket = new ItemComponentPacket();
-            itemComponentPacket.getItems().add(itemMappings.getFurnaceMinecartData());
+            itemComponentPacket.getItems().addAll(itemMappings.getComponentItemData());
             session.sendPacket(itemComponentPacket);
         }
 
@@ -170,7 +187,7 @@ public class Player {
         data.setChunkX(0);
         data.setChunkZ(0);
         data.setSubChunksLength(0);
-        data.setData(ChunkUtils.EMPTY_CHUNK_DATA);
+        data.setData(EMPTY_CHUNK_DATA);
         data.setCachingEnabled(false);
         session.sendPacket(data);
 
@@ -242,9 +259,7 @@ public class Player {
 
             geyserSession.setDimension(DimensionUtils.THE_END);
 
-            geyserSession.setRemoteAddress(currentServer.getAddress());
-            geyserSession.setRemotePort(currentServer.getPort());
-            geyserSession.setRemoteAuthType(currentServer.isOnline() ? AuthType.ONLINE : AuthType.OFFLINE);
+            geyserSession.remoteServer(currentServer);
 
             // Tell Geyser to handle the login
             SetLocalPlayerAsInitializedPacket initializedPacket = new SetLocalPlayerAsInitializedPacket();
@@ -258,7 +273,7 @@ public class Player {
                 }
             }
 
-            if (geyserSession.getRemoteAuthType() != AuthType.ONLINE) {
+            if (geyserSession.remoteServer().authType() != AuthType.ONLINE) {
                 geyserSession.authenticate(geyserSession.getAuthData().name());
             }
         }
